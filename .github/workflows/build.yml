@@ -1,0 +1,84 @@
+name: Build
+
+# Baut das Image, prüft es mit Trivy und veröffentlicht es nur, wenn keine
+# behebbaren HIGH/CRITICAL-Lücken drin sind. Wöchentlich neu, damit neue
+# Go-/Basis-Fixes (über Dependabot) und neue CVE-Daten greifen.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/knevs/vehicle-command-hardened
+  # Gepinnt wie auf dem Server (cve-scan.sh); trivy-action bewusst nicht genutzt.
+  TRIVY: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Image bauen (lokal)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: vch:test
+          provenance: false
+
+      - name: Funktionstest
+        run: |
+          # -h listet die Optionen und endet mit Exit 2 (flag-Paket); geprüft wird die Ausgabe.
+          out=$(docker run --rm vch:test -h 2>&1 || true)
+          echo "$out" | head -20
+          echo "$out" | grep -q -- "-port"
+          echo "$out" | grep -q -- "-key-file"
+
+      - name: Trivy-Gate (behebbare HIGH/CRITICAL brechen ab)
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          docker save vch:test > "$RUNNER_TEMP/trivy/img.tar"
+          docker run --rm -v "$RUNNER_TEMP/trivy:/w" "$TRIVY" image \
+            --input /w/img.tar --scanners vuln --severity HIGH,CRITICAL \
+            --ignore-unfixed --exit-code 1 --no-progress
+
+      - name: Version bestimmen
+        id: v
+        run: |
+          tag=$(sed -n 's/^ARG UPSTREAM_TAG=//p' Dockerfile)
+          go=$(sed -n 's/^FROM golang:\([0-9.]*\).*/\1/p' Dockerfile)
+          echo "tag=${tag#v}-go${go}" >> "$GITHUB_OUTPUT"
+
+      - name: Bei GHCR anmelden
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Veröffentlichen
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:stable
+            ${{ env.IMAGE }}:${{ steps.v.outputs.tag }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
