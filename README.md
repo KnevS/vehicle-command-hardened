@@ -21,7 +21,7 @@ Dieser Build verwendet **denselben Quellcode** (fester Upstream-Commit), aber:
 
 ```
 ghcr.io/knevs/vehicle-command-hardened:stable
-ghcr.io/knevs/vehicle-command-hardened:<upstream>-go<version>   # z. B. 0.4.1-go1.27.2
+ghcr.io/knevs/vehicle-command-hardened:<upstream>-go<version>   # z. B. 0.4.1-go1.27.3
 ```
 
 Direkter Ersatz für `tesla/vehicle-command` – gleicher Entrypoint `tesla-http-proxy`, gleiche Optionen.
